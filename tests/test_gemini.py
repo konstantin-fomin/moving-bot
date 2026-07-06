@@ -2,7 +2,13 @@ import pytest
 
 from app.database import NewChecklistItem
 from app.services.checklist import build_manual_item, process_user_message
-from app.services.gemini import MarkDoneAction, ParsedActions, parse_gemini_response
+from app.services.gemini import (
+    MarkDoneAction,
+    ParsedActions,
+    parse_gemini_response,
+    parse_voice_gemini_response,
+)
+from app.services.voice_actions import VoiceCommand
 
 
 def test_parse_gemini_response_adds_items_and_mark_done():
@@ -26,6 +32,34 @@ def test_parse_gemini_response_adds_items_and_mark_done():
         NewChecklistItem(category="important", name="Паспорта", link=None, note=None),
     ]
     assert parsed.mark_done == [MarkDoneAction(item_id=7, name="Скотч")]
+
+
+def test_parse_voice_gemini_response_adds_and_manages_items():
+    parsed = parse_voice_gemini_response(
+        """
+        [
+          {"action":"add","name":"Пастила конфеты вкусвил для Евы","category":"buy","link":null,"note":null},
+          {"action":"mark_done","item_id":7,"name":"Скотч"},
+          {"action":"delete","item_id":8,"name":"Старые коробки"},
+          {"action":"edit","item_id":9,"name":"Паспорта","new_name":"Паспорта и свидетельство","new_link":null,"new_note":null}
+        ]
+        """
+    )
+
+    assert parsed == [
+        VoiceCommand(
+            action="add",
+            category="buy",
+            name="Пастила конфеты вкусвил для Евы",
+        ),
+        VoiceCommand(action="mark_done", item_id=7),
+        VoiceCommand(action="delete", item_id=8),
+        VoiceCommand(
+            action="edit",
+            item_id=9,
+            new_name="Паспорта и свидетельство",
+        ),
+    ]
 
 
 def test_build_manual_item_preserves_full_text():

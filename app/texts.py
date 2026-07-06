@@ -18,9 +18,6 @@ MAIN_MENU_BUTTONS = (
     TAKE_BUTTON,
     IMPORTANT_BUTTON,
     ALL_ITEMS_BUTTON,
-    MARK_DONE_BUTTON,
-    EDIT_BUTTON,
-    DELETE_BUTTON,
     UNDO_BUTTON,
 )
 
@@ -42,3 +39,7 @@ INVALID_ITEM_ID_TEXT = "Нужен номер пункта из списка, н
 EDIT_ITEM_TEXT = (
     "Пришлите новый полный текст пункта. Можно вместе со ссылкой — я обновлю её."
 )
+VOICE_EMPTY_TEXT = (
+    "Не смогла уверенно понять голосовое действие. Попробуйте сказать короче."
+)
+VOICE_ERROR_TEXT = "Не получилось разобрать голосовое сообщение. Попробуйте ещё раз."

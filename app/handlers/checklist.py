@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+from io import BytesIO
 import logging
 import re
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from app.database import Category, Database
 from app.handlers.common import require_user
-from app.keyboards import add_category_keyboard, cancel_keyboard, main_menu_keyboard
+from app.keyboards import (
+    add_category_keyboard,
+    cancel_keyboard,
+    item_actions_keyboard,
+    items_inline_keyboard,
+    main_menu_keyboard,
+    voice_confirmation_keyboard,
+)
 from app.services.checklist import build_manual_item, process_user_message
 from app.services.formatting import (
     format_action_result,
@@ -18,6 +26,13 @@ from app.services.formatting import (
     format_undo_result,
 )
 from app.services.gemini import ChecklistParser
+from app.services.voice_actions import (
+    apply_voice_commands,
+    format_voice_apply_result,
+    format_voice_confirmation,
+    voice_commands_from_dicts,
+    voice_commands_to_dicts,
+)
 from app.texts import (
     ADD_BUTTON,
     ADD_BUY_BUTTON,
@@ -41,6 +56,8 @@ from app.texts import (
     PARSER_ERROR_TEXT,
     TAKE_BUTTON,
     UNDO_BUTTON,
+    VOICE_EMPTY_TEXT,
+    VOICE_ERROR_TEXT,
 )
 
 
@@ -60,12 +77,22 @@ class ManageItemState(StatesGroup):
     waiting_edit_text = State()
 
 
+class VoiceActionState(StatesGroup):
+    waiting_confirmation = State()
+
+
 ADD_CATEGORY_BY_BUTTON: dict[str, Category] = {
     ADD_BUY_BUTTON: "buy",
     ADD_TAKE_BUTTON: "take",
     ADD_IMPORTANT_BUTTON: "important",
 }
 ITEM_ID_RE = re.compile(r"#?\s*(\d+)")
+SCOPE_CATEGORIES: dict[str, Category | None] = {
+    "all": None,
+    "buy": "buy",
+    "take": "take",
+    "important": "important",
+}
 
 
 @router.message(F.text == ADD_BUTTON)
@@ -88,6 +115,7 @@ async def start_manual_add(
 @router.message(ManageItemState.waiting_delete_id, F.text == ADD_CANCEL_BUTTON)
 @router.message(ManageItemState.waiting_edit_id, F.text == ADD_CANCEL_BUTTON)
 @router.message(ManageItemState.waiting_edit_text, F.text == ADD_CANCEL_BUTTON)
+@router.message(VoiceActionState.waiting_confirmation, F.text == ADD_CANCEL_BUTTON)
 async def cancel_state_action(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=main_menu_keyboard())
@@ -129,8 +157,7 @@ async def show_all_items(message: Message, db: Database) -> None:
     if user is None:
         return
 
-    items = await db.list_items()
-    await message.answer(format_items(items), reply_markup=main_menu_keyboard())
+    await _send_items_list(message, db, "all")
 
 
 @router.message(F.text == UNDO_BUTTON)
@@ -143,6 +170,82 @@ async def undo_last_action(message: Message, db: Database) -> None:
     await message.answer(format_undo_result(result), reply_markup=main_menu_keyboard())
 
 
+@router.message(F.voice)
+async def parse_voice(
+    message: Message,
+    bot: Bot,
+    db: Database,
+    parser: ChecklistParser,
+    state: FSMContext,
+) -> None:
+    user = await require_user(message, db)
+    if user is None or message.voice is None:
+        return
+
+    items = await db.list_items()
+    buffer = BytesIO()
+    await bot.download(message.voice, destination=buffer)
+    audio = buffer.getvalue()
+    mime_type = message.voice.mime_type or "audio/ogg"
+
+    try:
+        commands = await parser.parse_voice_message(audio, mime_type, items)
+    except Exception:
+        logger.exception("Не удалось разобрать голосовое сообщение через Gemini")
+        await message.answer(VOICE_ERROR_TEXT, reply_markup=main_menu_keyboard())
+        return
+
+    if not commands:
+        await message.answer(VOICE_EMPTY_TEXT, reply_markup=main_menu_keyboard())
+        return
+
+    await state.update_data(voice_commands=voice_commands_to_dicts(commands))
+    await state.set_state(VoiceActionState.waiting_confirmation)
+    await message.answer(
+        format_voice_confirmation(commands, items),
+        reply_markup=voice_confirmation_keyboard(),
+    )
+
+
+@router.callback_query(VoiceActionState.waiting_confirmation, F.data == "voice:cancel")
+async def cancel_voice_action(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if callback.message is not None:
+        await callback.message.edit_text("Голосовое действие отменено.")
+    await callback.answer()
+
+
+@router.callback_query(VoiceActionState.waiting_confirmation, F.data == "voice:confirm")
+async def confirm_voice_action(
+    callback: CallbackQuery,
+    db: Database,
+    state: FSMContext,
+) -> None:
+    user = await _require_callback_user(callback, db)
+    if user is None:
+        return
+
+    data = await state.get_data()
+    raw_commands = data.get("voice_commands")
+    commands = (
+        voice_commands_from_dicts(raw_commands)
+        if isinstance(raw_commands, list)
+        else []
+    )
+    await state.clear()
+
+    if not commands:
+        if callback.message is not None:
+            await callback.message.edit_text("Голосовое действие уже не найдено.")
+        await callback.answer()
+        return
+
+    result = await apply_voice_commands(db, user, commands)
+    if callback.message is not None:
+        await callback.message.edit_text(format_voice_apply_result(result))
+    await callback.answer("Готово.")
+
+
 @router.message(F.text == MARK_DONE_BUTTON)
 async def start_mark_done(message: Message, db: Database, state: FSMContext) -> None:
     user = await require_user(message, db)
@@ -151,6 +254,119 @@ async def start_mark_done(message: Message, db: Database, state: FSMContext) -> 
 
     await state.set_state(ManageItemState.waiting_mark_done_id)
     await message.answer(ITEM_ID_TEXT, reply_markup=cancel_keyboard())
+
+
+@router.callback_query(F.data.startswith("items:list:"))
+async def callback_show_items_list(callback: CallbackQuery, db: Database) -> None:
+    user = await _require_callback_user(callback, db)
+    if user is None:
+        return
+
+    scope = _parse_list_callback(callback.data or "")
+    if scope is None:
+        await callback.answer("Не поняла список.", show_alert=True)
+        return
+
+    await _edit_items_list(callback, db, scope)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("item:menu:"))
+async def callback_open_item_menu(callback: CallbackQuery, db: Database) -> None:
+    user = await _require_callback_user(callback, db)
+    if user is None:
+        return
+
+    item_id, scope = _parse_item_callback(callback.data or "", "menu")
+    if item_id is None or scope is None:
+        await callback.answer("Не поняла пункт.", show_alert=True)
+        return
+
+    item = await db.get_item(item_id)
+    if item is None:
+        await callback.answer(ITEM_NOT_FOUND_TEXT, show_alert=True)
+        return
+
+    if callback.message is not None:
+        await callback.message.edit_text(
+            format_items([item]),
+            reply_markup=item_actions_keyboard(item, scope),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("item:done:"))
+async def callback_mark_done(callback: CallbackQuery, db: Database) -> None:
+    user = await _require_callback_user(callback, db)
+    if user is None:
+        return
+
+    item_id, scope = _parse_item_callback(callback.data or "", "done")
+    if item_id is None or scope is None:
+        await callback.answer("Не поняла пункт.", show_alert=True)
+        return
+
+    item = await db.get_item(item_id)
+    if item is None:
+        await callback.answer(ITEM_NOT_FOUND_TEXT, show_alert=True)
+        return
+    if item.status == "done":
+        await callback.answer("Уже отмечено.", show_alert=True)
+        return
+
+    await db.apply_actions(user.id, [], [item_id])
+    await _edit_items_list(callback, db, scope)
+    await callback.answer("Отмечено.")
+
+
+@router.callback_query(F.data.startswith("item:delete:"))
+async def callback_delete_item(callback: CallbackQuery, db: Database) -> None:
+    user = await _require_callback_user(callback, db)
+    if user is None:
+        return
+
+    item_id, scope = _parse_item_callback(callback.data or "", "delete")
+    if item_id is None or scope is None:
+        await callback.answer("Не поняла пункт.", show_alert=True)
+        return
+
+    deleted = await db.delete_item(item_id)
+    if deleted is None:
+        await callback.answer(ITEM_NOT_FOUND_TEXT, show_alert=True)
+        return
+
+    await _edit_items_list(callback, db, scope)
+    await callback.answer("Удалено.")
+
+
+@router.callback_query(F.data.startswith("item:edit:"))
+async def callback_start_edit_item(
+    callback: CallbackQuery,
+    db: Database,
+    state: FSMContext,
+) -> None:
+    user = await _require_callback_user(callback, db)
+    if user is None:
+        return
+
+    item_id, scope = _parse_item_callback(callback.data or "", "edit")
+    if item_id is None or scope is None:
+        await callback.answer("Не поняла пункт.", show_alert=True)
+        return
+
+    item = await db.get_item(item_id)
+    if item is None:
+        await callback.answer(ITEM_NOT_FOUND_TEXT, show_alert=True)
+        return
+
+    await state.update_data(item_id=item.id, return_scope=scope)
+    await state.set_state(ManageItemState.waiting_edit_text)
+    if callback.message is not None:
+        await callback.message.answer(
+            f"Сейчас:\n• {item.name}\n\n{EDIT_ITEM_TEXT}",
+            reply_markup=cancel_keyboard(),
+        )
+    await callback.answer()
 
 
 @router.message(ManageItemState.waiting_mark_done_id)
@@ -294,7 +510,7 @@ async def finish_edit_item(
     updated = await db.update_item(
         existing.id,
         edited.name,
-        edited.link or existing.link,
+        edited.link,
         existing.note,
     )
     await state.clear()
@@ -369,8 +585,7 @@ async def _send_category(message: Message, db: Database, category: Category) -> 
     if user is None:
         return
 
-    items = await db.list_items(category=category)
-    await message.answer(format_items(items), reply_markup=main_menu_keyboard())
+    await _send_items_list(message, db, category)
 
 
 def _parse_item_id(text: str) -> int | None:
@@ -378,3 +593,66 @@ def _parse_item_id(text: str) -> int | None:
     if match is None:
         return None
     return int(match.group(1))
+
+
+async def _send_items_list(message: Message, db: Database, scope: str) -> None:
+    items = await _items_for_scope(db, scope)
+    if not items:
+        await message.answer(format_items(items), reply_markup=main_menu_keyboard())
+        return
+
+    await message.answer(
+        format_items(items),
+        reply_markup=items_inline_keyboard(items, scope),
+    )
+
+
+async def _edit_items_list(callback: CallbackQuery, db: Database, scope: str) -> None:
+    items = await _items_for_scope(db, scope)
+    if callback.message is None:
+        return
+    if not items:
+        await callback.message.edit_text("Список пока пуст.")
+        return
+    await callback.message.edit_text(
+        format_items(items),
+        reply_markup=items_inline_keyboard(items, scope),
+    )
+
+
+async def _items_for_scope(db: Database, scope: str) -> list:
+    category = SCOPE_CATEGORIES.get(scope)
+    if scope != "all" and category is None:
+        return []
+    return await db.list_items(category=category)
+
+
+async def _require_callback_user(callback: CallbackQuery, db: Database):
+    user = await db.get_user_by_telegram_id(callback.from_user.id)
+    if user is None:
+        await callback.answer(
+            "Это личный бот для переезда. Попросите владельца прислать приглашение.",
+            show_alert=True,
+        )
+    return user
+
+
+def _parse_list_callback(data: str) -> str | None:
+    parts = data.split(":")
+    if len(parts) != 3 or parts[:2] != ["items", "list"]:
+        return None
+    scope = parts[2]
+    return scope if scope in SCOPE_CATEGORIES else None
+
+
+def _parse_item_callback(data: str, action: str) -> tuple[int | None, str | None]:
+    parts = data.split(":")
+    if len(parts) != 4 or parts[:2] != ["item", action]:
+        return None, None
+    scope = parts[3]
+    if scope not in SCOPE_CATEGORIES:
+        return None, None
+    try:
+        return int(parts[2]), scope
+    except ValueError:
+        return None, None
