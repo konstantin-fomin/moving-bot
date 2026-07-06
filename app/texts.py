@@ -3,6 +3,9 @@ ADD_BUY_BUTTON = "🛒 Купить"
 ADD_TAKE_BUTTON = "🎒 Что взять"
 ADD_IMPORTANT_BUTTON = "⚠️ Важное"
 ADD_CANCEL_BUTTON = "Отмена"
+MARK_DONE_BUTTON = "✅ Отметить"
+EDIT_BUTTON = "✏️ Редактировать"
+DELETE_BUTTON = "🗑 Удалить"
 BUY_BUTTON = "🛒 Что купить"
 TAKE_BUTTON = "🎒 Что взять"
 IMPORTANT_BUTTON = "⚠️ Важное"
@@ -15,6 +18,9 @@ MAIN_MENU_BUTTONS = (
     TAKE_BUTTON,
     IMPORTANT_BUTTON,
     ALL_ITEMS_BUTTON,
+    MARK_DONE_BUTTON,
+    EDIT_BUTTON,
+    DELETE_BUTTON,
     UNDO_BUTTON,
 )
 
@@ -30,3 +36,9 @@ ADD_ITEM_TEXT = (
     "Пришлите полный текст пункта. Можно вместе со ссылкой — я сохраню её отдельно."
 )
 ADD_EMPTY_TEXT = "Не вижу текст пункта. Пришлите название, можно со ссылкой."
+ITEM_ID_TEXT = "Пришлите номер пункта из списка, например 12."
+ITEM_NOT_FOUND_TEXT = "Не нашла пункт с таким номером."
+INVALID_ITEM_ID_TEXT = "Нужен номер пункта из списка, например 12."
+EDIT_ITEM_TEXT = (
+    "Пришлите новый полный текст пункта. Можно вместе со ссылкой — я обновлю её."
+)

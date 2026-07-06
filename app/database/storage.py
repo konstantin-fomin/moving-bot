@@ -305,6 +305,37 @@ class Database:
         )
         return _item_from_row(row) if row else None
 
+    async def update_item(
+        self,
+        item_id: int,
+        name: str,
+        link: str | None,
+        note: str | None,
+    ) -> ChecklistItem | None:
+        clean_name = name.strip()
+        if not clean_name:
+            return None
+
+        self._db.execute(
+            """
+            UPDATE checklist_items
+            SET name = ?, link = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (clean_name, _blank_to_none(link), _blank_to_none(note), item_id),
+        )
+        self._db.commit()
+        return await self.get_item(item_id)
+
+    async def delete_item(self, item_id: int) -> ChecklistItem | None:
+        item = await self.get_item(item_id)
+        if item is None:
+            return None
+
+        self._db.execute("DELETE FROM checklist_items WHERE id = ?", (item_id,))
+        self._db.commit()
+        return item
+
     async def apply_actions(
         self,
         user_id: int,

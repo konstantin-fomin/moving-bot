@@ -8,7 +8,10 @@ from app.texts import (
     ADD_TAKE_BUTTON,
     ALL_ITEMS_BUTTON,
     BUY_BUTTON,
+    DELETE_BUTTON,
+    EDIT_BUTTON,
     IMPORTANT_BUTTON,
+    MARK_DONE_BUTTON,
     TAKE_BUTTON,
     UNDO_BUTTON,
 )
@@ -26,6 +29,11 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text=IMPORTANT_BUTTON),
                 KeyboardButton(text=ALL_ITEMS_BUTTON),
             ],
+            [
+                KeyboardButton(text=MARK_DONE_BUTTON),
+                KeyboardButton(text=EDIT_BUTTON),
+            ],
+            [KeyboardButton(text=DELETE_BUTTON)],
             [KeyboardButton(text=UNDO_BUTTON)],
         ],
         resize_keyboard=True,
@@ -45,4 +53,12 @@ def add_category_keyboard() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите категорию",
+    )
+
+
+def cancel_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=ADD_CANCEL_BUTTON)]],
+        resize_keyboard=True,
+        input_field_placeholder="Можно отменить действие",
     )

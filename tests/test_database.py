@@ -44,3 +44,63 @@ async def test_add_and_mark_done_items(db):
     assert [item.name for item in mark_result.marked_done] == ["Коробки"]
     assert [item.name for item in active] == ["Куртки"]
     assert [item.name for item in done] == ["Коробки"]
+
+
+@pytest.mark.asyncio
+async def test_done_items_stay_in_list_after_active_items(db):
+    owner = await db.create_owner_if_first(telegram_id=1, name="Анна")
+    result = await db.apply_actions(
+        owner.id,
+        [
+            NewChecklistItem(category="buy", name="Коробки"),
+            NewChecklistItem(category="buy", name="Скотч"),
+        ],
+        [],
+    )
+
+    await db.apply_actions(owner.id, [], [result.added[0].id])
+    items = await db.list_items(category="buy")
+
+    assert [(item.name, item.status) for item in items] == [
+        ("Скотч", "active"),
+        ("Коробки", "done"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_item_changes_text_and_link(db):
+    owner = await db.create_owner_if_first(telegram_id=1, name="Анна")
+    result = await db.apply_actions(
+        owner.id,
+        [NewChecklistItem(category="buy", name="Пастила", link=None, note="2 штуки")],
+        [],
+    )
+
+    updated = await db.update_item(
+        result.added[0].id,
+        "Пастила конфеты вкусвил для Евы",
+        "https://example.com/pastila",
+        "2 штуки",
+    )
+
+    assert updated is not None
+    assert updated.name == "Пастила конфеты вкусвил для Евы"
+    assert updated.link == "https://example.com/pastila"
+    assert updated.note == "2 штуки"
+
+
+@pytest.mark.asyncio
+async def test_delete_item_removes_it_from_list(db):
+    owner = await db.create_owner_if_first(telegram_id=1, name="Анна")
+    result = await db.apply_actions(
+        owner.id,
+        [NewChecklistItem(category="take", name="Куртка")],
+        [],
+    )
+
+    deleted = await db.delete_item(result.added[0].id)
+    items = await db.list_items()
+
+    assert deleted is not None
+    assert deleted.name == "Куртка"
+    assert items == []
