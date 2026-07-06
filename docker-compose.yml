@@ -1,0 +1,13 @@
+services:
+  moving-checklist-bot:
+    build: .
+    image: moving-checklist-bot:latest
+    container_name: moving-checklist-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
