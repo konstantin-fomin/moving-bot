@@ -21,6 +21,7 @@ from app.keyboards import (
 )
 from app.services.checklist import build_manual_item, process_user_message
 from app.services.formatting import (
+    CATEGORY_TITLES,
     format_action_result,
     format_items,
     format_undo_result,
@@ -602,7 +603,7 @@ async def _send_items_list(message: Message, db: Database, scope: str) -> None:
         return
 
     await message.answer(
-        format_items(items),
+        _items_picker_text(scope),
         reply_markup=items_inline_keyboard(items, scope),
     )
 
@@ -615,7 +616,7 @@ async def _edit_items_list(callback: CallbackQuery, db: Database, scope: str) ->
         await callback.message.edit_text("Список пока пуст.")
         return
     await callback.message.edit_text(
-        format_items(items),
+        _items_picker_text(scope),
         reply_markup=items_inline_keyboard(items, scope),
     )
 
@@ -656,3 +657,10 @@ def _parse_item_callback(data: str, action: str) -> tuple[int | None, str | None
         return int(parts[2]), scope
     except ValueError:
         return None, None
+
+
+def _items_picker_text(scope: str) -> str:
+    category = SCOPE_CATEGORIES.get(scope)
+    if category is None:
+        return "Выберите пункт:"
+    return f"{CATEGORY_TITLES[category]}\nВыберите пункт:"
