@@ -327,6 +327,22 @@ class Database:
         self._db.commit()
         return await self.get_item(item_id)
 
+    async def update_item_category(
+        self,
+        item_id: int,
+        category: Category,
+    ) -> ChecklistItem | None:
+        self._db.execute(
+            """
+            UPDATE checklist_items
+            SET category = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (category, item_id),
+        )
+        self._db.commit()
+        return await self.get_item(item_id)
+
     async def delete_item(self, item_id: int) -> ChecklistItem | None:
         item = await self.get_item(item_id)
         if item is None:

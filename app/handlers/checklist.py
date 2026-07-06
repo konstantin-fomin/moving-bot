@@ -9,17 +9,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, ForceReply, Message
 
-from app.database import Category, Database
+from app.database import Category, ChecklistItem, Database, NewChecklistItem
 from app.handlers.common import require_user
 from app.keyboards import (
     add_category_keyboard,
     cancel_keyboard,
+    duplicate_confirmation_keyboard,
     item_actions_keyboard,
+    item_move_category_keyboard,
     items_inline_keyboard,
     main_menu_keyboard,
     voice_confirmation_keyboard,
 )
-from app.services.checklist import build_manual_item, process_user_message
+from app.services.checklist import build_manual_item, parse_user_message
 from app.services.formatting import (
     CATEGORY_TITLES,
     format_action_result,
@@ -47,9 +49,15 @@ from app.texts import (
     ALL_ITEMS_BUTTON,
     BUY_BUTTON,
     DELETE_BUTTON,
+    DUPLICATE_ADD_BUTTON,
+    DUPLICATE_CANCEL_BUTTON,
+    DUPLICATE_CANCEL_TEXT,
+    DUPLICATE_CONFIRM_TEXT,
     EDIT_BUTTON,
     EDIT_ITEM_TEXT,
     EMPTY_INPUT_TEXT,
+    FORWARDED_CATEGORY_TEXT,
+    FORWARDED_EMPTY_TEXT,
     INVALID_ITEM_ID_TEXT,
     IMPORTANT_BUTTON,
     ITEM_ID_TEXT,
@@ -72,6 +80,10 @@ class AddItemState(StatesGroup):
     waiting_text = State()
 
 
+class ForwardedItemState(StatesGroup):
+    waiting_category = State()
+
+
 class ManageItemState(StatesGroup):
     waiting_mark_done_id = State()
     waiting_delete_id = State()
@@ -80,6 +92,10 @@ class ManageItemState(StatesGroup):
 
 
 class VoiceActionState(StatesGroup):
+    waiting_confirmation = State()
+
+
+class DuplicateAddState(StatesGroup):
     waiting_confirmation = State()
 
 
@@ -113,11 +129,13 @@ async def start_manual_add(
 
 @router.message(AddItemState.waiting_category, F.text == ADD_CANCEL_BUTTON)
 @router.message(AddItemState.waiting_text, F.text == ADD_CANCEL_BUTTON)
+@router.message(ForwardedItemState.waiting_category, F.text == ADD_CANCEL_BUTTON)
 @router.message(ManageItemState.waiting_mark_done_id, F.text == ADD_CANCEL_BUTTON)
 @router.message(ManageItemState.waiting_delete_id, F.text == ADD_CANCEL_BUTTON)
 @router.message(ManageItemState.waiting_edit_id, F.text == ADD_CANCEL_BUTTON)
 @router.message(ManageItemState.waiting_edit_text, F.text == ADD_CANCEL_BUTTON)
 @router.message(VoiceActionState.waiting_confirmation, F.text == ADD_CANCEL_BUTTON)
+@router.message(DuplicateAddState.waiting_confirmation, F.text == ADD_CANCEL_BUTTON)
 async def cancel_state_action(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=main_menu_keyboard())
@@ -254,6 +272,39 @@ async def confirm_voice_action(
     await callback.answer("Готово.")
 
 
+@router.message(DuplicateAddState.waiting_confirmation, F.text == DUPLICATE_CANCEL_BUTTON)
+async def cancel_duplicate_add(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(DUPLICATE_CANCEL_TEXT, reply_markup=main_menu_keyboard())
+
+
+@router.message(DuplicateAddState.waiting_confirmation, F.text == DUPLICATE_ADD_BUTTON)
+async def confirm_duplicate_add(
+    message: Message,
+    db: Database,
+    state: FSMContext,
+) -> None:
+    user = await require_user(message, db)
+    if user is None:
+        return
+
+    data = await state.get_data()
+    new_items = _new_items_from_dicts(data.get("duplicate_new_items"))
+    mark_done_ids = _int_list(data.get("duplicate_mark_done_ids"))
+    await state.clear()
+
+    result = await db.apply_actions(user.id, new_items, mark_done_ids)
+    await message.answer(format_action_result(result), reply_markup=main_menu_keyboard())
+
+
+@router.message(DuplicateAddState.waiting_confirmation)
+async def reject_unknown_duplicate_confirmation(message: Message) -> None:
+    await message.answer(
+        "Выберите «✅ Добавить» или «❌ Не добавлять».",
+        reply_markup=duplicate_confirmation_keyboard(),
+    )
+
+
 @router.message(F.text == MARK_DONE_BUTTON)
 async def start_mark_done(message: Message, db: Database, state: FSMContext) -> None:
     user = await require_user(message, db)
@@ -375,6 +426,63 @@ async def callback_start_edit_item(
             reply_markup=cancel_keyboard(),
         )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("item:move:"))
+async def callback_open_move_menu(callback: CallbackQuery, db: Database) -> None:
+    user = await _require_callback_user(callback, db)
+    if user is None:
+        return
+
+    item_id, scope = _parse_item_callback(callback.data or "", "move")
+    if item_id is None or scope is None:
+        await callback.answer("Не поняла пункт.", show_alert=True)
+        return
+
+    item = await db.get_item(item_id)
+    if item is None:
+        await callback.answer(ITEM_NOT_FOUND_TEXT, show_alert=True)
+        return
+
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"{format_items([item])}\n\nКуда переместить?",
+            reply_markup=item_move_category_keyboard(item, scope),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("item:move_to:"))
+async def callback_move_item(callback: CallbackQuery, db: Database) -> None:
+    user = await _require_callback_user(callback, db)
+    if user is None:
+        return
+
+    item_id, category, scope = _parse_move_to_callback(callback.data or "")
+    if item_id is None or category is None or scope is None:
+        await callback.answer("Не поняла категорию.", show_alert=True)
+        return
+
+    item = await db.get_item(item_id)
+    if item is None:
+        await callback.answer(ITEM_NOT_FOUND_TEXT, show_alert=True)
+        return
+    if item.category == category:
+        await callback.answer("Пункт уже в этой категории.", show_alert=True)
+        return
+
+    updated = await db.update_item_category(item_id, category)
+    if updated is None:
+        await callback.answer(ITEM_NOT_FOUND_TEXT, show_alert=True)
+        return
+
+    return_scope = _scope_after_category_change(scope, updated.category)
+    if callback.message is not None:
+        await callback.message.edit_text(
+            format_items([updated]),
+            reply_markup=item_actions_keyboard(updated, return_scope),
+        )
+    await callback.answer("Перемещено.")
 
 
 @router.message(ManageItemState.waiting_mark_done_id)
@@ -564,9 +672,75 @@ async def finish_manual_add(
         )
         return
 
-    result = await db.apply_actions(user.id, [item], [])
-    await state.clear()
-    await message.answer(format_action_result(result), reply_markup=main_menu_keyboard())
+    await _apply_actions_or_ask_duplicate(
+        message,
+        db,
+        user.id,
+        state,
+        [item],
+        [],
+    )
+
+
+@router.message(F.forward_origin, (F.text | F.caption))
+async def start_forwarded_add(
+    message: Message,
+    db: Database,
+    state: FSMContext,
+) -> None:
+    user = await require_user(message, db)
+    if user is None:
+        return
+
+    text = _message_text(message)
+    if not text:
+        await message.answer(FORWARDED_EMPTY_TEXT, reply_markup=main_menu_keyboard())
+        return
+
+    await state.update_data(forwarded_text=text)
+    await state.set_state(ForwardedItemState.waiting_category)
+    await message.answer(FORWARDED_CATEGORY_TEXT, reply_markup=add_category_keyboard())
+
+
+@router.message(ForwardedItemState.waiting_category, F.text.in_(ADD_CATEGORY_BY_BUTTON))
+async def finish_forwarded_add(
+    message: Message,
+    db: Database,
+    state: FSMContext,
+) -> None:
+    user = await require_user(message, db)
+    if user is None:
+        return
+
+    data = await state.get_data()
+    text = data.get("forwarded_text")
+    if not isinstance(text, str) or not text.strip():
+        await state.clear()
+        await message.answer(
+            "Текст пересланного сообщения потерялся. Перешлите его ещё раз.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    item = build_manual_item(ADD_CATEGORY_BY_BUTTON[message.text or ""], text)
+    if item is None:
+        await state.clear()
+        await message.answer(FORWARDED_EMPTY_TEXT, reply_markup=main_menu_keyboard())
+        return
+
+    await _apply_actions_or_ask_duplicate(
+        message,
+        db,
+        user.id,
+        state,
+        [item],
+        [],
+    )
+
+
+@router.message(ForwardedItemState.waiting_category)
+async def reject_unknown_forwarded_category(message: Message) -> None:
+    await message.answer(FORWARDED_CATEGORY_TEXT, reply_markup=add_category_keyboard())
 
 
 @router.message(F.text)
@@ -574,6 +748,7 @@ async def parse_free_text(
     message: Message,
     db: Database,
     parser: ChecklistParser,
+    state: FSMContext,
 ) -> None:
     user = await require_user(message, db)
     if user is None:
@@ -585,13 +760,20 @@ async def parse_free_text(
         return
 
     try:
-        result = await process_user_message(db, user, text, parser)
+        parsed = await parse_user_message(db, text, parser)
     except Exception:
         logger.exception("Не удалось разобрать сообщение через Gemini")
         await message.answer(PARSER_ERROR_TEXT, reply_markup=main_menu_keyboard())
         return
 
-    await message.answer(format_action_result(result), reply_markup=main_menu_keyboard())
+    await _apply_actions_or_ask_duplicate(
+        message,
+        db,
+        user.id,
+        state,
+        parsed.new_items,
+        [action.item_id for action in parsed.mark_done],
+    )
 
 
 async def _send_category(message: Message, db: Database, category: Category) -> None:
@@ -602,11 +784,93 @@ async def _send_category(message: Message, db: Database, category: Category) -> 
     await _send_items_list(message, db, category)
 
 
+async def _apply_actions_or_ask_duplicate(
+    message: Message,
+    db: Database,
+    user_id: int,
+    state: FSMContext,
+    new_items: list[NewChecklistItem],
+    mark_done_ids: list[int],
+) -> None:
+    duplicates = await _find_exact_duplicates(db, new_items)
+    if duplicates:
+        await state.update_data(
+            duplicate_new_items=_new_items_to_dicts(new_items),
+            duplicate_mark_done_ids=mark_done_ids,
+        )
+        await state.set_state(DuplicateAddState.waiting_confirmation)
+        await message.answer(
+            DUPLICATE_CONFIRM_TEXT.format(items=format_items(duplicates)),
+            reply_markup=duplicate_confirmation_keyboard(),
+        )
+        return
+
+    result = await db.apply_actions(user_id, new_items, mark_done_ids)
+    await state.clear()
+    await message.answer(format_action_result(result), reply_markup=main_menu_keyboard())
+
+
+async def _find_exact_duplicates(
+    db: Database,
+    new_items: list[NewChecklistItem],
+) -> list[ChecklistItem]:
+    names = {item.name.strip() for item in new_items if item.name.strip()}
+    if not names:
+        return []
+    active_items = await db.list_items(status="active")
+    return [item for item in active_items if item.name in names]
+
+
+def _new_items_to_dicts(items: list[NewChecklistItem]) -> list[dict[str, str | None]]:
+    return [
+        {
+            "category": item.category,
+            "name": item.name,
+            "link": item.link,
+            "note": item.note,
+        }
+        for item in items
+    ]
+
+
+def _new_items_from_dicts(value) -> list[NewChecklistItem]:
+    if not isinstance(value, list):
+        return []
+
+    items: list[NewChecklistItem] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        category = item.get("category")
+        name = item.get("name")
+        if category not in ("buy", "take", "important") or not isinstance(name, str):
+            continue
+        items.append(
+            NewChecklistItem(
+                category=category,
+                name=name,
+                link=item.get("link") if isinstance(item.get("link"), str) else None,
+                note=item.get("note") if isinstance(item.get("note"), str) else None,
+            )
+        )
+    return items
+
+
+def _int_list(value) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, int)]
+
+
 def _parse_item_id(text: str) -> int | None:
     match = ITEM_ID_RE.search(text)
     if match is None:
         return None
     return int(match.group(1))
+
+
+def _message_text(message: Message) -> str:
+    return (message.text or message.caption or "").strip()
 
 
 async def _send_items_list(message: Message, db: Database, scope: str) -> None:
@@ -616,7 +880,7 @@ async def _send_items_list(message: Message, db: Database, scope: str) -> None:
         return
 
     await message.answer(
-        _items_picker_text(scope),
+        _items_picker_text(scope, items),
         reply_markup=items_inline_keyboard(items, scope),
     )
 
@@ -629,7 +893,7 @@ async def _edit_items_list(callback: CallbackQuery, db: Database, scope: str) ->
         await callback.message.edit_text("Список пока пуст.")
         return
     await callback.message.edit_text(
-        _items_picker_text(scope),
+        _items_picker_text(scope, items),
         reply_markup=items_inline_keyboard(items, scope),
     )
 
@@ -672,7 +936,30 @@ def _parse_item_callback(data: str, action: str) -> tuple[int | None, str | None
         return None, None
 
 
-def _items_picker_text(scope: str) -> str:
+def _parse_move_to_callback(
+    data: str,
+) -> tuple[int | None, Category | None, str | None]:
+    parts = data.split(":")
+    if len(parts) != 5 or parts[:2] != ["item", "move_to"]:
+        return None, None, None
+    category = parts[3]
+    scope = parts[4]
+    if category not in ("buy", "take", "important") or scope not in SCOPE_CATEGORIES:
+        return None, None, None
+    try:
+        item_id = int(parts[2])
+    except ValueError:
+        return None, None, None
+    return item_id, category, scope
+
+
+def _scope_after_category_change(scope: str, category: Category) -> str:
+    return "all" if scope == "all" else category
+
+
+def _items_picker_text(scope: str, items: list[ChecklistItem]) -> str:
+    if scope == "all":
+        return format_items(items, "📋 Весь список")
     category = SCOPE_CATEGORIES.get(scope)
     if category is None:
         return "Выберите пункт:"

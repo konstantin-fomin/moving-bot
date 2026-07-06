@@ -90,6 +90,25 @@ async def test_update_item_changes_text_and_link(db):
 
 
 @pytest.mark.asyncio
+async def test_update_item_category_moves_item_between_lists(db):
+    owner = await db.create_owner_if_first(telegram_id=1, name="Анна")
+    result = await db.apply_actions(
+        owner.id,
+        [NewChecklistItem(category="buy", name="Пастила")],
+        [],
+    )
+
+    updated = await db.update_item_category(result.added[0].id, "important")
+    buy_items = await db.list_items(category="buy")
+    important_items = await db.list_items(category="important")
+
+    assert updated is not None
+    assert updated.category == "important"
+    assert buy_items == []
+    assert [item.name for item in important_items] == ["Пастила"]
+
+
+@pytest.mark.asyncio
 async def test_delete_item_removes_it_from_list(db):
     owner = await db.create_owner_if_first(telegram_id=1, name="Анна")
     result = await db.apply_actions(

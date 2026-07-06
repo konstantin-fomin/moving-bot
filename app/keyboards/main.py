@@ -5,7 +5,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.database import ChecklistItem
+from app.database import Category, ChecklistItem
 
 from app.texts import (
     ADD_BUTTON,
@@ -15,10 +15,19 @@ from app.texts import (
     ADD_TAKE_BUTTON,
     ALL_ITEMS_BUTTON,
     BUY_BUTTON,
+    DUPLICATE_ADD_BUTTON,
+    DUPLICATE_CANCEL_BUTTON,
     IMPORTANT_BUTTON,
     TAKE_BUTTON,
     UNDO_BUTTON,
 )
+
+
+CATEGORY_BUTTON_TITLES: dict[Category, str] = {
+    "buy": "🛒 Что купить",
+    "take": "🎒 Что взять",
+    "important": "⚠️ Важное",
+}
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -70,15 +79,23 @@ def items_inline_keyboard(
     if not items:
         return None
 
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=_item_button_text(item),
-                callback_data=f"item:menu:{item.id}:{scope}",
+    if scope == "all":
+        rows = []
+        for category, title in CATEGORY_BUTTON_TITLES.items():
+            group = [item for item in items if item.category == category]
+            if not group:
+                continue
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=title,
+                        callback_data=f"items:list:{category}",
+                    )
+                ]
             )
-        ]
-        for item in items
-    ]
+            rows.extend(_item_button_row(item, scope) for item in group)
+    else:
+        rows = [_item_button_row(item, scope) for item in items]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -103,6 +120,12 @@ def item_actions_keyboard(item: ChecklistItem, scope: str) -> InlineKeyboardMark
             ],
             [
                 InlineKeyboardButton(
+                    text="📦 Переместить",
+                    callback_data=f"item:move:{item.id}:{scope}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🗑 Удалить",
                     callback_data=f"item:delete:{item.id}:{scope}",
                 )
@@ -116,6 +139,44 @@ def item_actions_keyboard(item: ChecklistItem, scope: str) -> InlineKeyboardMark
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def item_move_category_keyboard(
+    item: ChecklistItem,
+    scope: str,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=title,
+                callback_data=f"item:move_to:{item.id}:{category}:{scope}",
+            )
+        ]
+        for category, title in CATEGORY_BUTTON_TITLES.items()
+        if category != item.category
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="↩️ К пункту",
+                callback_data=f"item:menu:{item.id}:{scope}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def duplicate_confirmation_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=DUPLICATE_ADD_BUTTON),
+                KeyboardButton(text=DUPLICATE_CANCEL_BUTTON),
+            ]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Подтвердите добавление дубля",
+    )
 
 
 def voice_confirmation_keyboard() -> InlineKeyboardMarkup:
@@ -135,3 +196,12 @@ def _item_button_text(item: ChecklistItem) -> str:
     if len(text) <= 55:
         return text
     return f"{text[:52]}..."
+
+
+def _item_button_row(item: ChecklistItem, scope: str) -> list[InlineKeyboardButton]:
+    return [
+        InlineKeyboardButton(
+            text=_item_button_text(item),
+            callback_data=f"item:menu:{item.id}:{scope}",
+        )
+    ]

@@ -34,6 +34,16 @@ ADD_ITEM_TEXT = (
 )
 ADD_ITEM_PLACEHOLDER = "Напишите пункт, можно со ссылкой"
 ADD_EMPTY_TEXT = "Не вижу текст пункта. Пришлите название, можно со ссылкой."
+FORWARDED_CATEGORY_TEXT = "В какую категорию переместить пересланное сообщение?"
+FORWARDED_EMPTY_TEXT = (
+    "В пересланном сообщении нет текста. Перешлите текстовое сообщение или сообщение с подписью."
+)
+DUPLICATE_CONFIRM_TEXT = (
+    "Такой пункт уже есть:\n{items}\n\nВсё равно добавить?"
+)
+DUPLICATE_ADD_BUTTON = "✅ Добавить"
+DUPLICATE_CANCEL_BUTTON = "❌ Не добавлять"
+DUPLICATE_CANCEL_TEXT = "Не добавила дубль."
 ITEM_ID_TEXT = "Пришлите номер пункта из списка, например 12."
 ITEM_NOT_FOUND_TEXT = "Не нашла пункт с таким номером."
 INVALID_ITEM_ID_TEXT = "Нужен номер пункта из списка, например 12."

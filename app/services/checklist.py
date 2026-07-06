@@ -16,15 +16,23 @@ async def process_user_message(
     text: str,
     parser: ChecklistParser,
 ) -> ActionResult:
-    active_items = await db.list_items(status="active")
-    parsed = await parser.parse_message(text, active_items)
-    parsed = preserve_plain_single_item_text(text, parsed)
+    parsed = await parse_user_message(db, text, parser)
     mark_done_ids = [action.item_id for action in parsed.mark_done]
     return await db.apply_actions(
         user_id=user.id,
         new_items=parsed.new_items,
         mark_done_ids=mark_done_ids,
     )
+
+
+async def parse_user_message(
+    db: Database,
+    text: str,
+    parser: ChecklistParser,
+) -> ParsedActions:
+    active_items = await db.list_items(status="active")
+    parsed = await parser.parse_message(text, active_items)
+    return preserve_plain_single_item_text(text, parsed)
 
 
 def clean_manual_items(items: list[NewChecklistItem]) -> list[NewChecklistItem]:
