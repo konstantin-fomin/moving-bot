@@ -7,7 +7,7 @@ import re
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, ForceReply, Message
 
 from app.database import Category, Database
 from app.handlers.common import require_user
@@ -41,6 +41,7 @@ from app.texts import (
     ADD_CATEGORY_TEXT,
     ADD_EMPTY_TEXT,
     ADD_IMPORTANT_BUTTON,
+    ADD_ITEM_PLACEHOLDER,
     ADD_ITEM_TEXT,
     ADD_TAKE_BUTTON,
     ALL_ITEMS_BUTTON,
@@ -129,7 +130,13 @@ async def select_manual_add_category(message: Message, state: FSMContext) -> Non
 
     await state.update_data(category=ADD_CATEGORY_BY_BUTTON[message.text])
     await state.set_state(AddItemState.waiting_text)
-    await message.answer(ADD_ITEM_TEXT)
+    await message.answer(
+        ADD_ITEM_TEXT,
+        reply_markup=ForceReply(
+            selective=True,
+            input_field_placeholder=ADD_ITEM_PLACEHOLDER,
+        ),
+    )
 
 
 @router.message(AddItemState.waiting_category)
@@ -548,7 +555,13 @@ async def finish_manual_add(
 
     item = build_manual_item(category, message.text or "")
     if item is None:
-        await message.answer(ADD_EMPTY_TEXT)
+        await message.answer(
+            ADD_EMPTY_TEXT,
+            reply_markup=ForceReply(
+                selective=True,
+                input_field_placeholder=ADD_ITEM_PLACEHOLDER,
+            ),
+        )
         return
 
     result = await db.apply_actions(user.id, [item], [])
