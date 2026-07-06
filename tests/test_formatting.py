@@ -32,18 +32,40 @@ def test_format_action_result_mentions_added_and_done_items():
     assert "✓ Куртка" in text
 
 
+def test_format_action_result_mentions_added_link_and_note():
+    text = format_action_result(
+        ActionResult(
+            added=[
+                _item(
+                    1,
+                    "buy",
+                    "active",
+                    "Пастила конфеты вкусвил для Евы",
+                    link="https://example.com/pastila",
+                    note="2 упаковки",
+                )
+            ],
+            marked_done=[],
+        )
+    )
+
+    assert "• Пастила конфеты вкусвил для Евы" in text
+    assert "https://example.com/pastila" in text
+    assert "(2 упаковки)" in text
+
+
 def test_format_undo_empty_result():
     assert format_undo_result(None) == "Пока нечего отменять."
 
 
-def _item(item_id, category, status, name):
+def _item(item_id, category, status, name, link=None, note=None):
     return ChecklistItem(
         id=item_id,
         category=category,
         status=status,
         name=name,
-        link=None,
-        note=None,
+        link=link,
+        note=note,
         created_at="2026-01-01 00:00:00",
         updated_at="2026-01-01 00:00:00",
     )

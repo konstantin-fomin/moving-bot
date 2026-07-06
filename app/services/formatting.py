@@ -42,7 +42,7 @@ def format_action_result(result: ActionResult) -> str:
     lines: list[str] = []
     if result.added:
         lines.append("Добавлено:")
-        lines.extend(f"• {item.name}" for item in result.added)
+        lines.extend(_format_added_item(item) for item in result.added)
     if result.marked_done:
         if lines:
             lines.append("")
@@ -66,6 +66,15 @@ def format_undo_result(result: ActionResult | None) -> str:
 def _format_item(item: ChecklistItem) -> str:
     marker = STATUS_MARKERS[item.status]
     pieces = [f"{marker} #{item.id} {item.name}"]
+    if item.link:
+        pieces.append(item.link)
+    if item.note:
+        pieces.append(f"({item.note})")
+    return " ".join(pieces)
+
+
+def _format_added_item(item: ChecklistItem) -> str:
+    pieces = [f"• {item.name}"]
     if item.link:
         pieces.append(item.link)
     if item.note:
