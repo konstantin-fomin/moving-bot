@@ -40,4 +40,4 @@ async def test_invalid_invitation_is_rejected(db):
 
 
 def test_invitation_link_uses_bot_username():
-    assert build_invite_link("abc123") == "https://t.me/moving_checklist_bot?start=abc123"
+    assert build_invite_link("abc123") == "https://t.me/Moving_GE_bot?start=abc123"

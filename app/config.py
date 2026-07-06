@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DATABASE_PATH = BASE_DIR / "data" / "bot.db"
-BOT_USERNAME = "moving_checklist_bot"
+BOT_USERNAME = "Moving_GE_bot"
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_TZ = "Etc/UTC"
 
